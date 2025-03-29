@@ -18,39 +18,37 @@
 </template>
 
 <script setup lang="ts">
-/* eslint-disable vue/no-setup-props-destructure */
-/* eslint-disable-next-line no-undef */
+import { ref, onMounted, watch, computed } from 'vue';
+import { GameObjectType } from '../types';
+import { GameConfig } from '../config/gameConfig';
+
+// Props
 const props = defineProps<{
   width: number;
   height: number;
 }>();
-
-import { ref, onMounted, watch, computed } from 'vue';
-import { useGameStore } from '../stores';
-import { useGameLoop, useControls } from '../composables';
-import { GameObjectType } from '../types';
-import { GameConfig } from '../config/gameConfig';
-import { convertLevelToGameObjects } from '../helpers/levelHelpers';
-import { formatScore, formatTime } from '../utils/gameUtils';
 
 // Canvas references
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const ctx = ref<CanvasRenderingContext2D | null>(null);
 
 // Game state
-const gameStore = useGameStore();
-const isPaused = computed(() => gameStore.isPaused);
-
-// Initialize controls
-const { keys } = useControls();
+const isPaused = ref(false);
+const gameObjects = ref<any[]>([]);
+const score = ref(0);
+const lives = ref(3);
+const level = ref(1);
+const timeElapsed = ref(0);
+const isPlayerPoweredUp = ref(false);
 
 // Pause the game
 const pauseGame = () => {
-  if (gameStore.isPaused) {
-    gameStore.resumeGame();
-  } else {
-    gameStore.pauseGame();
-  }
+  isPaused.value = !isPaused.value;
+};
+
+// Add points to the score
+const addScore = (points: number) => {
+  score.value += points;
 };
 
 // Initialize canvas and context
@@ -58,7 +56,7 @@ onMounted(() => {
   if (canvasRef.value) {
     ctx.value = canvasRef.value.getContext('2d');
     
-    // Make sure keyboard controls are set up
+    // Initialize keyboard controls
     window.keyboard = window.keyboard || {};
     window.addEventListener('keydown', (e) => {
       window.keyboard[e.code] = true;
@@ -75,91 +73,447 @@ onMounted(() => {
     
     // Initialize the game
     initGame();
+    
+    // Start the game loop
+    requestAnimationFrame(gameLoop);
   }
 });
 
-// Initialize the game
-const initGame = () => {
-  // Clear any existing game objects
-  gameStore.gameObjects = [];
+// Time tracking for game loop
+let lastTime = 0;
+
+// Game loop
+const gameLoop = (timestamp: number) => {
+  const deltaTime = (timestamp - lastTime) / 1000;
+  lastTime = timestamp;
   
-  // Create a basic level (a flat ground with platforms)
-  createBasicLevel();
+  if (!isPaused.value) {
+    // Update game state
+    updateGame(deltaTime);
+  }
   
-  // Start the game
-  gameStore.startGame();
+  // Render the game
+  renderGame();
+  
+  // Continue the loop
+  requestAnimationFrame(gameLoop);
 };
 
-// Create a basic level with platforms
-const createBasicLevel = () => {
-  const tileSize = GameConfig.level.tileSize;
-  const levelWidth = Math.floor(props.width / tileSize);
-  const levelHeight = Math.floor(props.height / tileSize);
-  
-  // Create a simple level object
-  const level = {
-    id: 1,
-    name: 'Level 1: First Steps',
-    width: levelWidth,
-    height: levelHeight,
-    tileSize: tileSize,
-    tiles: Array(levelHeight).fill(null).map(() => Array(levelWidth).fill(0)), // Initialize with empty tiles
-    background: 'blue_sky',
-    music: 'level1_music',
-    timeLimit: GameConfig.level.timeLimit
+// Initialize the game
+const initGame = () => {
+  // Create a player
+  const player = {
+    id: 'player',
+    x: 100,
+    y: props.height - 100,
+    width: 32,
+    height: 32,
+    type: GameObjectType.PLAYER,
+    velocity: { x: 0, y: 0 },
+    speed: 200,
+    jumpPower: 400,
+    isJumping: false,
+    visible: true,
+    poweredUp: false,
+    
+    update(deltaTime: number) {
+      // Apply gravity
+      this.velocity.y += 1000 * deltaTime;
+      
+      // Move based on keyboard input
+      if (window.keyboard.ArrowLeft) {
+        this.velocity.x = -this.speed;
+      } else if (window.keyboard.ArrowRight) {
+        this.velocity.x = this.speed;
+      } else {
+        this.velocity.x = 0;
+      }
+      
+      // Jump
+      if (window.keyboard.Space && !this.isJumping) {
+        this.velocity.y = -this.jumpPower;
+        this.isJumping = true;
+      }
+      
+      // Update position
+      this.x += this.velocity.x * deltaTime;
+      this.y += this.velocity.y * deltaTime;
+      
+      // Keep player within bounds
+      if (this.x < 0) this.x = 0;
+      if (this.x + this.width > props.width) this.x = props.width - this.width;
+      
+      // Check if player fell off the screen
+      if (this.y > props.height) {
+        lives.value--;
+        if (lives.value <= 0) {
+          // Game over logic would go here
+          console.log("Game Over!");
+        } else {
+          // Respawn
+          this.x = 100;
+          this.y = props.height - 100;
+          this.velocity.x = 0;
+          this.velocity.y = 0;
+        }
+      }
+    },
+    
+    render(ctx: CanvasRenderingContext2D) {
+      // Draw a mushroom character
+      
+      // Adjust size if powered up
+      const sizeMultiplier = isPlayerPoweredUp.value ? 1.5 : 1;
+      const width = this.width * sizeMultiplier;
+      const height = this.height * sizeMultiplier;
+      
+      // Red cap
+      ctx.fillStyle = isPlayerPoweredUp.value ? '#FF6600' : '#D80000';
+      ctx.beginPath();
+      ctx.arc(this.x + width / 2, this.y + height / 4, width / 2, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // White spots
+      ctx.fillStyle = '#FFFFFF';
+      const spotRadius = width / 8;
+      ctx.beginPath();
+      ctx.arc(this.x + width / 4, this.y + height / 6, spotRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(this.x + width * 3/4, this.y + height / 6, spotRadius, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // White stem
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(
+        this.x + width / 4, 
+        this.y + height / 3, 
+        width / 2, 
+        height * 2/3
+      );
+      
+      // Eyes
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(this.x + width / 3, this.y + height / 2, spotRadius / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(this.x + width * 2/3, this.y + height / 2, spotRadius / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
   };
   
-  // Fill the bottom row with ground tiles
-  for (let x = 0; x < levelWidth; x++) {
-    level.tiles[levelHeight - 1][x] = 1; // Ground tile
-  }
+  // Add player to game objects
+  gameObjects.value.push(player);
   
-  // Create some platforms
-  // Platform 1
-  for (let x = 5; x < 8; x++) {
-    level.tiles[levelHeight - 4][x] = 2; // Brick tile
-  }
+  // Add ground
+  const ground = {
+    id: 'ground',
+    x: 0,
+    y: props.height - 32,
+    width: props.width,
+    height: 32,
+    type: GameObjectType.TILE,
+    visible: true,
+    
+    update() {
+      // Ground doesn't need updating
+    },
+    
+    render(ctx: CanvasRenderingContext2D) {
+      ctx.fillStyle = '#8B4513'; // Brown
+      ctx.fillRect(this.x, this.y, this.width, this.height);
+    }
+  };
   
-  // Platform 2
-  for (let x = 12; x < 16; x++) {
-    level.tiles[levelHeight - 6][x] = 2; // Brick tile
-  }
+  // Add ground to game objects
+  gameObjects.value.push(ground);
   
-  // Add a question block
-  level.tiles[levelHeight - 4][8] = 3; // Question block
+  // Add platforms
+  const platforms = [
+    { x: 200, y: props.height - 150, width: 100, height: 20 },
+    { x: 350, y: props.height - 220, width: 150, height: 20 },
+    { x: 100, y: props.height - 300, width: 80, height: 20 },
+    { x: 500, y: props.height - 180, width: 120, height: 20 }
+  ];
+  
+  platforms.forEach((platform, index) => {
+    gameObjects.value.push({
+      id: `platform_${index}`,
+      ...platform,
+      type: GameObjectType.TILE,
+      visible: true,
+      
+      update() {
+        // Platforms don't need updating
+      },
+      
+      render(ctx: CanvasRenderingContext2D) {
+        ctx.fillStyle = '#D2691E'; // Chocolate
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+      }
+    });
+  });
   
   // Add coins
-  level.tiles[levelHeight - 5][6] = 6; // Coin
-  level.tiles[levelHeight - 5][7] = 6; // Coin
-  level.tiles[levelHeight - 7][13] = 6; // Coin
-  level.tiles[levelHeight - 7][14] = 6; // Coin
+  const coinPositions = [
+    { x: 220, y: props.height - 180 },
+    { x: 260, y: props.height - 180 },
+    { x: 400, y: props.height - 250 },
+    { x: 450, y: props.height - 250 },
+    { x: 120, y: props.height - 330 },
+    { x: 550, y: props.height - 210 }
+  ];
   
-  // Add an enemy
-  level.tiles[levelHeight - 2][15] = 8; // Enemy
+  coinPositions.forEach((position, index) => {
+    gameObjects.value.push({
+      id: `coin_${index}`,
+      x: position.x,
+      y: position.y,
+      width: 20,
+      height: 20,
+      type: GameObjectType.COLLECTIBLE,
+      collectibleType: 'coin',
+      points: 100,
+      visible: true,
+      
+      update() {
+        // Check for collision with player
+        const player = gameObjects.value.find(obj => obj.id === 'player');
+        if (player && this.visible && checkCollision(this, player)) {
+          this.visible = false;
+          addScore(this.points);
+        }
+      },
+      
+      render(ctx: CanvasRenderingContext2D) {
+        if (!this.visible) return;
+        
+        // Draw a coin
+        ctx.fillStyle = '#FFD700'; // Gold
+        ctx.beginPath();
+        ctx.arc(
+          this.x + this.width / 2, 
+          this.y + this.height / 2, 
+          this.width / 2, 
+          0, 
+          Math.PI * 2
+        );
+        ctx.fill();
+        
+        // Add shine
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath();
+        ctx.arc(
+          this.x + this.width / 2 - 3, 
+          this.y + this.height / 2 - 3, 
+          2, 
+          0, 
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+    });
+  });
   
-  // Add a pipe
-  level.tiles[levelHeight - 2][12] = 4; // Pipe top
-  level.tiles[levelHeight - 2][13] = 4; // Pipe top
-  level.tiles[levelHeight - 1][12] = 5; // Pipe body
-  level.tiles[levelHeight - 1][13] = 5; // Pipe body
+  // Add power-up mushroom
+  gameObjects.value.push({
+    id: 'powerup_mushroom',
+    x: 380,
+    y: props.height - 270,
+    width: 25,
+    height: 25,
+    type: GameObjectType.POWERUP,
+    powerupType: 'mushroom',
+    visible: true,
+    
+    update() {
+      // Check for collision with player
+      const player = gameObjects.value.find(obj => obj.id === 'player');
+      if (player && this.visible && checkCollision(this, player)) {
+        this.visible = false;
+        isPlayerPoweredUp.value = true;
+        addScore(500);
+        setTimeout(() => {
+          isPlayerPoweredUp.value = false;
+        }, 10000); // Power up lasts for 10 seconds
+      }
+    },
+    
+    render(ctx: CanvasRenderingContext2D) {
+      if (!this.visible) return;
+      
+      // Draw a power-up mushroom
+      ctx.fillStyle = '#FF6600'; // Orange cap
+      ctx.fillRect(this.x, this.y, this.width, this.height/2);
+      ctx.fillStyle = '#FFFFFF'; // White stem
+      ctx.fillRect(this.x, this.y + this.height/2, this.width, this.height/2);
+      
+      // Add spots
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(
+        this.x + this.width / 3, 
+        this.y + this.height / 4, 
+        2, 
+        0, 
+        Math.PI * 2
+      );
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(
+        this.x + this.width * 2/3, 
+        this.y + this.height / 4, 
+        2, 
+        0, 
+        Math.PI * 2
+      );
+      ctx.fill();
+    }
+  });
   
-  // Add player start position
-  level.tiles[levelHeight - 2][2] = 9; // Start
+  // Add enemies
+  const enemyPositions = [
+    { x: 300, y: props.height - 64, direction: -1 },
+    { x: 600, y: props.height - 64, direction: -1 },
+    { x: 400, y: props.height - 250, direction: 1 }
+  ];
   
-  // Add level end
-  level.tiles[levelHeight - 2][levelWidth - 3] = 10; // End
-  
-  // Convert level data to game objects
-  convertLevelToGameObjects(level);
+  enemyPositions.forEach((position, index) => {
+    gameObjects.value.push({
+      id: `enemy_${index}`,
+      x: position.x,
+      y: position.y,
+      width: 30,
+      height: 30,
+      type: GameObjectType.ENEMY,
+      speed: 50, // pixels per second
+      direction: position.direction, // -1 for left, 1 for right
+      visible: true,
+      
+      update(deltaTime: number) {
+        // Move enemy
+        this.x += this.speed * this.direction * deltaTime;
+        
+        // Turn around at screen edges
+        if (this.x <= 0 || this.x + this.width >= props.width) {
+          this.direction *= -1;
+        }
+        
+        // Check for collision with player
+        const player = gameObjects.value.find(obj => obj.id === 'player');
+        if (player && this.visible && checkCollision(this, player)) {
+          // Check if player is landing on enemy from above
+          if (player.velocity.y > 0 && player.y + player.height < this.y + this.height / 2) {
+            // Player defeated enemy
+            this.visible = false;
+            player.velocity.y = -200; // Bounce
+            addScore(150);
+          } else if (!isPlayerPoweredUp.value) {
+            // Player hit by enemy
+            lives.value--;
+            if (lives.value <= 0) {
+              // Game over logic
+              console.log("Game Over!");
+            } else {
+              // Reset player position
+              player.x = 100;
+              player.y = props.height - 100;
+              player.velocity.x = 0;
+              player.velocity.y = 0;
+            }
+          } else {
+            // Powered up player defeats enemy regardless of angle
+            this.visible = false;
+            addScore(150);
+            // Reduce power up effect to make it slightly more balanced
+            setTimeout(() => {
+              isPlayerPoweredUp.value = false;
+            }, 1000);
+          }
+        }
+      },
+      
+      render(ctx: CanvasRenderingContext2D) {
+        if (!this.visible) return;
+        
+        // Draw a simple enemy (goomba-like)
+        ctx.fillStyle = '#8B4513'; // Brown
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+        
+        // Eyes
+        ctx.fillStyle = '#FFFFFF';
+        const eyeOffset = this.direction === -1 ? this.width / 3 : this.width * 2/3;
+        ctx.beginPath();
+        ctx.arc(
+          this.x + eyeOffset, 
+          this.y + this.height / 3, 
+          this.width / 8, 
+          0, 
+          Math.PI * 2
+        );
+        ctx.fill();
+        
+        // Add angry eyebrows
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(this.x + this.width / 4, this.y + this.height / 4);
+        ctx.lineTo(this.x + this.width / 2, this.y + this.height / 6);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(this.x + this.width * 3/4, this.y + this.height / 4);
+        ctx.lineTo(this.x + this.width / 2, this.y + this.height / 6);
+        ctx.stroke();
+      }
+    });
+  });
 };
 
 // Update game logic
 const updateGame = (deltaTime: number) => {
-  // Don't update if paused
-  if (gameStore.isPaused) return;
+  // Update all game objects
+  for (const obj of gameObjects.value) {
+    if (obj.visible) {
+      obj.update(deltaTime);
+    }
+  }
   
-  // Update game state
-  gameStore.updateGame(deltaTime);
+  // Check collisions for player with platforms
+  const player = gameObjects.value.find(obj => obj.id === 'player');
+  if (player) {
+    for (const obj of gameObjects.value) {
+      if (obj.id !== 'player' && obj.type === GameObjectType.TILE) {
+        // Simple AABB collision detection
+        if (checkCollision(player, obj)) {
+          // Collision from top (landing)
+          if (player.velocity.y > 0 && player.y < obj.y) {
+            player.y = obj.y - player.height;
+            player.velocity.y = 0;
+            player.isJumping = false;
+          }
+          // Collision from bottom (hitting ceiling)
+          else if (player.velocity.y < 0 && player.y + player.height > obj.y + obj.height) {
+            player.y = obj.y + obj.height;
+            player.velocity.y = 0;
+          }
+          // Collision from left (hitting wall)
+          else if (player.velocity.x > 0 && player.x < obj.x) {
+            player.x = obj.x - player.width;
+            player.velocity.x = 0;
+          }
+          // Collision from right (hitting wall)
+          else if (player.velocity.x < 0 && player.x + player.width > obj.x + obj.width) {
+            player.x = obj.x + obj.width;
+            player.velocity.x = 0;
+          }
+        }
+      }
+    }
+  }
+  
+  // Update time
+  timeElapsed.value += deltaTime;
 };
 
 // Render the game
@@ -174,7 +528,7 @@ const renderGame = () => {
   ctx.value.fillRect(0, 0, props.width, props.height);
   
   // Draw all game objects
-  for (const obj of gameStore.gameObjects) {
+  for (const obj of gameObjects.value) {
     if (obj.visible) {
       obj.render(ctx.value);
     }
@@ -183,8 +537,16 @@ const renderGame = () => {
   // Draw HUD (score, lives, etc.)
   renderHUD(ctx.value);
   
+  // Draw power-up status if active
+  if (isPlayerPoweredUp.value) {
+    ctx.value.fillStyle = '#FF6600';
+    ctx.value.font = '16px Arial';
+    ctx.value.textAlign = 'center';
+    ctx.value.fillText('POWERED UP!', props.width / 2, 30);
+  }
+  
   // Draw pause screen if game is paused
-  if (gameStore.isPaused) {
+  if (isPaused.value) {
     renderPauseScreen(ctx.value);
   }
 };
@@ -197,17 +559,23 @@ const renderHUD = (ctx: CanvasRenderingContext2D) => {
   ctx.textAlign = 'left';
   
   // Draw score
-  ctx.fillText(`Score: ${formatScore(gameStore.score)}`, 20, 30);
+  ctx.fillText(`Score: ${score.value.toString().padStart(6, '0')}`, 20, 30);
   
   // Draw lives
-  ctx.fillText(`Lives: ${gameStore.lives}`, 20, 60);
+  ctx.fillText(`Lives: ${lives.value}`, 20, 60);
   
   // Draw level
-  ctx.fillText(`Level: ${gameStore.level}`, 20, 90);
+  ctx.fillText(`Level: ${level.value}`, 20, 90);
   
   // Draw time
-  const timeRemaining = GameConfig.level.timeLimit - gameStore.timeElapsed;
-  ctx.fillText(`Time: ${formatTime(Math.max(0, timeRemaining))}`, props.width - 120, 30);
+  const timeInSeconds = Math.floor(timeElapsed.value);
+  const minutes = Math.floor(timeInSeconds / 60);
+  const seconds = timeInSeconds % 60;
+  ctx.fillText(
+    `Time: ${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`, 
+    props.width - 120, 
+    30
+  );
 };
 
 // Render the pause screen
@@ -227,22 +595,15 @@ const renderPauseScreen = (ctx: CanvasRenderingContext2D) => {
   ctx.fillText('Press ESC to resume', props.width / 2, props.height / 2 + 40);
 };
 
-// Initialize the game loop
-const { isRunning, start, stop } = useGameLoop(updateGame, renderGame);
-
-// Start the game loop when the component is mounted
-onMounted(() => {
-  start();
-});
-
-// Watch for game state changes
-watch(() => gameStore.isRunning, (newValue) => {
-  if (newValue) {
-    start();
-  } else {
-    stop();
-  }
-});
+// Check if two objects are colliding
+const checkCollision = (obj1: any, obj2: any): boolean => {
+  return (
+    obj1.x < obj2.x + obj2.width &&
+    obj1.x + obj1.width > obj2.x &&
+    obj1.y < obj2.y + obj2.height &&
+    obj1.y + obj1.height > obj2.y
+  );
+};
 </script>
 
 <style scoped>
@@ -285,7 +646,6 @@ watch(() => gameStore.isRunning, (newValue) => {
   padding: 8px 16px;
   border-radius: 4px;
   cursor: pointer;
-  font-family: 'Press Start 2P', Arial, sans-serif;
 }
 
 .pause-button:hover {
