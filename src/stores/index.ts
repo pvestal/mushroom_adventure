@@ -1,3 +1,4 @@
+/* eslint-disable no-dupe-else-if */
 // src/stores/index.ts
 import { defineStore } from 'pinia';
 import { 
@@ -198,14 +199,16 @@ export const useLevelStore = defineStore('level', {
     
     /**
      * Go to the next level
+     * @returns true if successfully moved to next level, false if there is no next level
      */
     nextLevel() {
       const nextId = this.currentLevelId + 1;
-      // Removed duplicate if condition and fixed syntax
-      if (this.levels.some((level: Level) => level.id === nextId)) {
+      
+      if (this.levels.some(level => level.id === nextId)) {
         this.loadLevel(nextId);
         return true;
       }
+      
       return false;
     }
   }

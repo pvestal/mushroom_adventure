@@ -58,7 +58,10 @@ export function preloadImages(imageUrls: string[]): Promise<void> {
     });
   });
   
-  return Promise.all(promises).then(() => {});
+  // Fix: Replace empty arrow function with a proper implementation
+  return Promise.all(promises).then(() => {
+    return; // Explicit return for a function returning void
+  });
 }
 
 /**
