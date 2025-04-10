@@ -12,8 +12,6 @@
 
 <script setup lang="ts">
 import GameCanvas from './components/GameCanvas.vue';
-
-// No Firebase dependency in this simplified version
 </script>
 
 <style>
