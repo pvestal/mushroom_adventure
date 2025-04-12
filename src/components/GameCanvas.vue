@@ -1,13 +1,30 @@
 <template>
   <div class="game-container">
+    <!-- Start Menu -->
+    <div v-if="gameState === 'menu'" class="menu">
+      <h2>Mushroom Adventure</h2>
+      <p>Use arrow keys to move and space to jump</p>
+      <button @click="startGame" class="menu-button">Start Game</button>
+    </div>
+    
+    <!-- Game Over Screen -->
+    <div v-if="gameState === 'gameOver'" class="menu game-over">
+      <h2>Game Over</h2>
+      <p>Your score: {{ score }}</p>
+      <button @click="backToMenu" class="menu-button">Back to Menu</button>
+    </div>
+    
+    <!-- Game Canvas -->
     <canvas 
+      v-show="gameState === 'playing'"
       ref="canvasRef" 
       :width="width" 
       :height="height" 
       class="game-canvas"
     ></canvas>
     
-    <div class="game-controls">
+    <!-- Game Controls (only visible during gameplay) -->
+    <div v-if="gameState === 'playing'" class="game-controls">
       <div class="controls-info">
         <p>Arrow keys to move</p>
         <p>Space to jump</p>
@@ -18,163 +35,471 @@
 </template>
 
 <script setup lang="ts">
-/* eslint-disable vue/no-setup-props-destructure */
-/* eslint-disable-next-line no-undef */
+import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+
+// Props
 const props = defineProps<{
   width: number;
   height: number;
 }>();
-
-import { ref, onMounted, watch, computed } from 'vue';
-import { useGameStore } from '../stores';
-import { useGameLoop, useControls } from '../composables';
-import { GameObjectType } from '../types';
-import { GameConfig } from '../config/gameConfig';
-import { convertLevelToGameObjects } from '../helpers/levelHelpers';
-import { formatScore, formatTime } from '../utils/gameUtils';
 
 // Canvas references
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const ctx = ref<CanvasRenderingContext2D | null>(null);
 
 // Game state
-const gameStore = useGameStore();
-const isPaused = computed(() => gameStore.isPaused);
+const gameState = ref<'menu' | 'playing' | 'gameOver'>('menu');
+const isPaused = ref(false);
+const gameObjects = ref<any[]>([]);
+const score = ref(0);
+const lives = ref(3);
+const level = ref(1);
+const timeElapsed = ref(0);
+const isPlayerPoweredUp = ref(false);
+let animationFrameId: number | null = null;
 
-// Initialize controls
-const { keys } = useControls();
+// Start the game
+const startGame = async () => {
+  // Reset game state
+  gameObjects.value = [];
+  score.value = 0;
+  lives.value = 3;
+  level.value = 1;
+  timeElapsed.value = 0;
+  isPlayerPoweredUp.value = false;
+  
+  // Change to playing state
+  gameState.value = 'playing';
+  isPaused.value = false;
+  
+  // Wait for the canvas to be visible in the DOM
+  await nextTick();
+  
+  // Initialize the game when canvas is ready
+  if (canvasRef.value) {
+    ctx.value = canvasRef.value.getContext('2d');
+    console.log('Canvas context initialized:', !!ctx.value);
+    
+    initGame();
+    lastTime = 0;
+    // Start the game loop
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+    }
+    animationFrameId = requestAnimationFrame(gameLoop);
+  } else {
+    console.error('Canvas reference not found');
+  }
+};
+
+// Back to menu
+const backToMenu = () => {
+  gameState.value = 'menu';
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+};
+
+// Handle game over
+const handleGameOver = () => {
+  gameState.value = 'gameOver';
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+};
 
 // Pause the game
 const pauseGame = () => {
-  if (gameStore.isPaused) {
-    gameStore.resumeGame();
-  } else {
-    gameStore.pauseGame();
-  }
+  isPaused.value = !isPaused.value;
 };
 
-// Initialize canvas and context
+// Add points to the score
+const addScore = (points: number) => {
+  score.value += points;
+};
+
+// Initialize keyboard controls
 onMounted(() => {
-  if (canvasRef.value) {
-    ctx.value = canvasRef.value.getContext('2d');
-    
-    // Make sure keyboard controls are set up
-    window.keyboard = window.keyboard || {};
-    window.addEventListener('keydown', (e) => {
-      window.keyboard[e.code] = true;
-      
-      // Pause/resume on Escape key
-      if (e.code === 'Escape') {
-        pauseGame();
-      }
-    });
-    
-    window.addEventListener('keyup', (e) => {
-      window.keyboard[e.code] = false;
-    });
-    
-    // Initialize the game
-    initGame();
+  window.keyboard = window.keyboard || {};
+  
+  window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('keyup', handleKeyUp);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown);
+  window.removeEventListener('keyup', handleKeyUp);
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
   }
 });
 
-// Initialize the game
-const initGame = () => {
-  // Clear any existing game objects
-  gameStore.gameObjects = [];
+// Keyboard event handlers
+const handleKeyDown = (e: KeyboardEvent) => {
+  window.keyboard[e.code] = true;
   
-  // Create a basic level (a flat ground with platforms)
-  createBasicLevel();
-  
-  // Start the game
-  gameStore.startGame();
+  // Pause/resume on Escape key
+  if (e.code === 'Escape' && gameState.value === 'playing') {
+    pauseGame();
+  }
 };
 
-// Create a basic level with platforms
-const createBasicLevel = () => {
-  const tileSize = GameConfig.level.tileSize;
-  const levelWidth = Math.floor(props.width / tileSize);
-  const levelHeight = Math.floor(props.height / tileSize);
+const handleKeyUp = (e: KeyboardEvent) => {
+  window.keyboard[e.code] = false;
+};
+
+// Time tracking for game loop
+let lastTime = 0;
+
+// Game loop
+const gameLoop = (timestamp: number) => {
+  if (gameState.value !== 'playing') return;
   
-  // Create a simple level object
-  const level = {
-    id: 1,
-    name: 'Level 1: First Steps',
-    width: levelWidth,
-    height: levelHeight,
-    tileSize: tileSize,
-    tiles: Array(levelHeight).fill(null).map(() => Array(levelWidth).fill(0)), // Initialize with empty tiles
-    background: 'blue_sky',
-    music: 'level1_music',
-    timeLimit: GameConfig.level.timeLimit
+  const deltaTime = lastTime ? (timestamp - lastTime) / 1000 : 0;
+  lastTime = timestamp;
+  
+  if (!isPaused.value) {
+    // Update game state
+    updateGame(deltaTime);
+    
+    // Check for game over condition
+    if (lives.value <= 0) {
+      handleGameOver();
+      return;
+    }
+  }
+  
+  // Render the game
+  renderGame();
+  
+  // Continue the loop
+  animationFrameId = requestAnimationFrame(gameLoop);
+};
+
+// Initialize the game
+const initGame = () => {
+  if (!ctx.value) {
+    console.error('Cannot initialize game: canvas context is null');
+    return;
+  }
+  
+  console.log('Initializing game objects');
+  
+  // Create a player
+  const player = {
+    id: 'player',
+    x: 100,
+    y: props.height - 100,
+    width: 32,
+    height: 32,
+    type: 'PLAYER',
+    velocity: { x: 0, y: 0 },
+    speed: 200,
+    jumpPower: 400,
+    isJumping: false,
+    visible: true,
+    
+    update(deltaTime: number) {
+      // Apply gravity
+      this.velocity.y += 1000 * deltaTime;
+      
+      // Move based on keyboard input
+      if (window.keyboard.ArrowLeft) {
+        this.velocity.x = -this.speed;
+      } else if (window.keyboard.ArrowRight) {
+        this.velocity.x = this.speed;
+      } else {
+        this.velocity.x = 0;
+      }
+      
+      // Jump
+      if (window.keyboard.Space && !this.isJumping) {
+        this.velocity.y = -this.jumpPower;
+        this.isJumping = true;
+      }
+      
+      // Update position
+      this.x += this.velocity.x * deltaTime;
+      this.y += this.velocity.y * deltaTime;
+      
+      // Keep player within bounds
+      if (this.x < 0) this.x = 0;
+      if (this.x + this.width > props.width) this.x = props.width - this.width;
+      
+      // Floor collision
+      if (this.y + this.height > props.height - 32) {
+        this.y = props.height - 32 - this.height;
+        this.velocity.y = 0;
+        this.isJumping = false;
+      }
+      
+      // Check platform collisions
+      for (const obj of gameObjects.value) {
+        if (obj.type === 'TILE' && obj.id !== 'ground' && checkCollision(this, obj)) {
+          // Only handle collision when player is falling onto platform from above
+          if (this.velocity.y > 0 && this.y + this.height < obj.y + obj.height / 2) {
+            this.y = obj.y - this.height;
+            this.velocity.y = 0;
+            this.isJumping = false;
+          }
+        }
+      }
+    },
+    
+    render(ctx: CanvasRenderingContext2D) {
+      // Draw a mushroom character
+      
+      // Red cap
+      ctx.fillStyle = '#D80000';
+      ctx.beginPath();
+      ctx.arc(this.x + this.width / 2, this.y + this.height / 4, this.width / 2, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // White spots
+      ctx.fillStyle = '#FFFFFF';
+      const spotRadius = this.width / 8;
+      ctx.beginPath();
+      ctx.arc(this.x + this.width / 4, this.y + this.height / 6, spotRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(this.x + this.width * 3/4, this.y + this.height / 6, spotRadius, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // White stem
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(
+        this.x + this.width / 4, 
+        this.y + this.height / 3, 
+        this.width / 2, 
+        this.height * 2/3
+      );
+      
+      // Eyes
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(this.x + this.width / 3, this.y + this.height / 2, spotRadius / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(this.x + this.width * 2/3, this.y + this.height / 2, spotRadius / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
   };
   
-  // Fill the bottom row with ground tiles
-  for (let x = 0; x < levelWidth; x++) {
-    level.tiles[levelHeight - 1][x] = 1; // Ground tile
-  }
+  // Add player to game objects
+  gameObjects.value.push(player);
   
-  // Create some platforms
-  // Platform 1
-  for (let x = 5; x < 8; x++) {
-    level.tiles[levelHeight - 4][x] = 2; // Brick tile
-  }
+  // Add ground
+  const ground = {
+    id: 'ground',
+    x: 0,
+    y: props.height - 32,
+    width: props.width,
+    height: 32,
+    type: 'TILE',
+    visible: true,
+    
+    update() {
+      // Ground doesn't need updating
+    },
+    
+    render(ctx: CanvasRenderingContext2D) {
+      ctx.fillStyle = '#8B4513'; // Brown
+      ctx.fillRect(this.x, this.y, this.width, this.height);
+    }
+  };
   
-  // Platform 2
-  for (let x = 12; x < 16; x++) {
-    level.tiles[levelHeight - 6][x] = 2; // Brick tile
-  }
+  // Add ground to game objects
+  gameObjects.value.push(ground);
   
-  // Add a question block
-  level.tiles[levelHeight - 4][8] = 3; // Question block
+  // Add platforms
+  const platforms = [
+    { id: 'platform1', x: 200, y: props.height - 120, width: 100, height: 20 },
+    { id: 'platform2', x: 350, y: props.height - 180, width: 120, height: 20 },
+    { id: 'platform3', x: 550, y: props.height - 150, width: 80, height: 20 },
+    { id: 'platform4', x: 650, y: props.height - 250, width: 100, height: 20 }
+  ];
   
-  // Add coins
-  level.tiles[levelHeight - 5][6] = 6; // Coin
-  level.tiles[levelHeight - 5][7] = 6; // Coin
-  level.tiles[levelHeight - 7][13] = 6; // Coin
-  level.tiles[levelHeight - 7][14] = 6; // Coin
+  platforms.forEach((platform, index) => {
+    gameObjects.value.push({
+      ...platform,
+      type: 'TILE',
+      visible: true,
+      update() {
+        // Platforms don't need updating
+      },
+      render(ctx: CanvasRenderingContext2D) {
+        // Draw platform with gradient
+        const gradient = ctx.createLinearGradient(this.x, this.y, this.x, this.y + this.height);
+        gradient.addColorStop(0, '#D2691E'); // Top color - chocolate
+        gradient.addColorStop(1, '#8B4513'); // Bottom color - brown
+        
+        ctx.fillStyle = gradient;
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+        
+        // Draw platform top edge
+        ctx.fillStyle = '#A0522D';
+        ctx.fillRect(this.x, this.y, this.width, 4);
+      }
+    });
+  });
   
-  // Add an enemy
-  level.tiles[levelHeight - 2][15] = 8; // Enemy
+  // Add enemies
+  const enemies = [
+    { 
+      id: 'enemy1', 
+      x: 300, 
+      y: props.height - 64, 
+      width: 32, 
+      height: 32, 
+      direction: -1,
+      moveRange: { min: 250, max: 400 } 
+    },
+    { 
+      id: 'enemy2', 
+      x: 500, 
+      y: props.height - 64, 
+      width: 32, 
+      height: 32, 
+      direction: 1,
+      moveRange: { min: 450, max: 600 } 
+    },
+    { 
+      id: 'enemy3', 
+      x: 650, 
+      y: props.height - 282, 
+      width: 32, 
+      height: 32, 
+      direction: 1,
+      moveRange: { min: 650, max: 720 } 
+    }
+  ];
   
-  // Add a pipe
-  level.tiles[levelHeight - 2][12] = 4; // Pipe top
-  level.tiles[levelHeight - 2][13] = 4; // Pipe top
-  level.tiles[levelHeight - 1][12] = 5; // Pipe body
-  level.tiles[levelHeight - 1][13] = 5; // Pipe body
+  enemies.forEach((enemy, index) => {
+    gameObjects.value.push({
+      ...enemy,
+      type: 'ENEMY',
+      visible: true,
+      speed: 80,
+      velocity: { x: enemy.direction * 80, y: 0 },
+      update(deltaTime: number) {
+        // Move enemy back and forth
+        this.x += this.velocity.x * deltaTime;
+        
+        // Change direction when reaching bounds
+        if (this.x <= this.moveRange.min) {
+          this.x = this.moveRange.min;
+          this.velocity.x = Math.abs(this.velocity.x);
+          this.direction = 1;
+        } else if (this.x >= this.moveRange.max) {
+          this.x = this.moveRange.max;
+          this.velocity.x = -Math.abs(this.velocity.x);
+          this.direction = -1;
+        }
+        
+        // Check collision with player
+        const player = gameObjects.value.find(obj => obj.type === 'PLAYER');
+        if (player && checkCollision(this, player)) {
+          // If player is falling on enemy from above
+          if (player.velocity.y > 0 && player.y + player.height < this.y + this.height / 2) {
+            // Player bounces off enemy
+            player.velocity.y = -player.jumpPower * 0.5;
+            
+            // Remove enemy
+            this.visible = false;
+            
+            // Add score
+            addScore(150);
+          } else {
+            // Player loses a life and gets knocked back
+            lives.value--;
+            player.velocity.x = (player.x < this.x) ? -200 : 200;
+            player.velocity.y = -200;
+          }
+        }
+      },
+      render(ctx: CanvasRenderingContext2D) {
+        // Draw enemy (simple goomba-style)
+        
+        // Brown body
+        ctx.fillStyle = '#8B4513';
+        ctx.beginPath();
+        ctx.arc(this.x + this.width / 2, this.y + this.height / 2, this.width / 2, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Eyes
+        ctx.fillStyle = '#FFFFFF';
+        const eyeRadius = this.width / 8;
+        
+        // Position eyes based on direction
+        const eyeOffsetX = this.direction * (this.width / 8);
+        
+        ctx.beginPath();
+        ctx.arc(this.x + this.width / 2 - this.width / 6 + eyeOffsetX, this.y + this.height / 3, eyeRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.beginPath();
+        ctx.arc(this.x + this.width / 2 + this.width / 6 + eyeOffsetX, this.y + this.height / 3, eyeRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Pupils
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(this.x + this.width / 2 - this.width / 6 + eyeOffsetX + (eyeOffsetX/2), this.y + this.height / 3, eyeRadius / 2, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.beginPath();
+        ctx.arc(this.x + this.width / 2 + this.width / 6 + eyeOffsetX + (eyeOffsetX/2), this.y + this.height / 3, eyeRadius / 2, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Mouth - frown
+        ctx.beginPath();
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2;
+        ctx.arc(this.x + this.width / 2, this.y + this.height * 0.65, this.width / 4, Math.PI * 0.2, Math.PI * 0.8, false);
+        ctx.stroke();
+        
+        // Feet
+        ctx.fillStyle = '#5D4037';
+        ctx.fillRect(this.x + this.width / 6, this.y + this.height - this.height / 6, this.width / 4, this.height / 6);
+        ctx.fillRect(this.x + this.width * 7/12, this.y + this.height - this.height / 6, this.width / 4, this.height / 6);
+      }
+    });
+  });
   
-  // Add player start position
-  level.tiles[levelHeight - 2][2] = 9; // Start
-  
-  // Add level end
-  level.tiles[levelHeight - 2][levelWidth - 3] = 10; // End
-  
-  // Convert level data to game objects
-  convertLevelToGameObjects(level);
+  console.log('Game objects initialized:', gameObjects.value.length);
 };
 
 // Update game logic
 const updateGame = (deltaTime: number) => {
-  // Don't update if paused
-  if (gameStore.isPaused) return;
+  // Update all game objects
+  for (const obj of gameObjects.value) {
+    if (obj.visible) {
+      obj.update(deltaTime);
+    }
+  }
   
-  // Update game state
-  gameStore.updateGame(deltaTime);
+  // Update time
+  timeElapsed.value += deltaTime;
 };
 
 // Render the game
 const renderGame = () => {
-  if (!ctx.value) return;
+  if (!ctx.value) {
+    console.error('Cannot render game: canvas context is null');
+    return;
+  }
   
   // Clear the canvas
   ctx.value.clearRect(0, 0, props.width, props.height);
   
   // Draw the background
-  ctx.value.fillStyle = GameConfig.visuals.backgroundColor;
+  ctx.value.fillStyle = '#87CEEB'; // Sky blue
   ctx.value.fillRect(0, 0, props.width, props.height);
   
   // Draw all game objects
-  for (const obj of gameStore.gameObjects) {
+  for (const obj of gameObjects.value) {
     if (obj.visible) {
       obj.render(ctx.value);
     }
@@ -184,7 +509,7 @@ const renderGame = () => {
   renderHUD(ctx.value);
   
   // Draw pause screen if game is paused
-  if (gameStore.isPaused) {
+  if (isPaused.value) {
     renderPauseScreen(ctx.value);
   }
 };
@@ -197,17 +522,23 @@ const renderHUD = (ctx: CanvasRenderingContext2D) => {
   ctx.textAlign = 'left';
   
   // Draw score
-  ctx.fillText(`Score: ${formatScore(gameStore.score)}`, 20, 30);
+  ctx.fillText(`Score: ${score.value.toString().padStart(6, '0')}`, 20, 30);
   
   // Draw lives
-  ctx.fillText(`Lives: ${gameStore.lives}`, 20, 60);
+  ctx.fillText(`Lives: ${lives.value}`, 20, 60);
   
   // Draw level
-  ctx.fillText(`Level: ${gameStore.level}`, 20, 90);
+  ctx.fillText(`Level: ${level.value}`, 20, 90);
   
   // Draw time
-  const timeRemaining = GameConfig.level.timeLimit - gameStore.timeElapsed;
-  ctx.fillText(`Time: ${formatTime(Math.max(0, timeRemaining))}`, props.width - 120, 30);
+  const timeInSeconds = Math.floor(timeElapsed.value);
+  const minutes = Math.floor(timeInSeconds / 60);
+  const seconds = timeInSeconds % 60;
+  ctx.fillText(
+    `Time: ${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`, 
+    props.width - 120, 
+    30
+  );
 };
 
 // Render the pause screen
@@ -227,22 +558,15 @@ const renderPauseScreen = (ctx: CanvasRenderingContext2D) => {
   ctx.fillText('Press ESC to resume', props.width / 2, props.height / 2 + 40);
 };
 
-// Initialize the game loop
-const { isRunning, start, stop } = useGameLoop(updateGame, renderGame);
-
-// Start the game loop when the component is mounted
-onMounted(() => {
-  start();
-});
-
-// Watch for game state changes
-watch(() => gameStore.isRunning, (newValue) => {
-  if (newValue) {
-    start();
-  } else {
-    stop();
-  }
-});
+// Check if two objects are colliding
+const checkCollision = (obj1: any, obj2: any): boolean => {
+  return (
+    obj1.x < obj2.x + obj2.width &&
+    obj1.x + obj1.width > obj2.x &&
+    obj1.y < obj2.y + obj2.height &&
+    obj1.y + obj1.height > obj2.y
+  );
+};
 </script>
 
 <style scoped>
@@ -252,13 +576,13 @@ watch(() => gameStore.isRunning, (newValue) => {
   justify-content: center;
   align-items: center;
   margin: 0 auto;
+  position: relative;
 }
 
 .game-canvas {
   border: 4px solid #333;
   box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
-  background-color: #000;
-  image-rendering: pixelated; /* For retro feel */
+  background-color: #87CEEB;
 }
 
 .game-controls {
@@ -285,10 +609,64 @@ watch(() => gameStore.isRunning, (newValue) => {
   padding: 8px 16px;
   border-radius: 4px;
   cursor: pointer;
-  font-family: 'Press Start 2P', Arial, sans-serif;
 }
 
 .pause-button:hover {
   background-color: #FF0000;
+}
+
+/* Menu Styles */
+.menu {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 800px;
+  height: 400px;
+  background-color: rgba(0, 0, 0, 0.8);
+  border: 4px solid #D80000;
+  color: white;
+  border-radius: 10px;
+  padding: 20px;
+  text-align: center;
+}
+
+.menu h2 {
+  font-size: 32px;
+  margin-bottom: 20px;
+  color: #D80000;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.menu p {
+  margin-bottom: 30px;
+  font-size: 18px;
+}
+
+.menu-button {
+  background-color: #D80000;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 4px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 10px;
+}
+
+.menu-button:hover {
+  background-color: #FF0000;
+  transform: scale(1.05);
+}
+
+/* Game Over specific styles */
+.game-over {
+  background-color: rgba(0, 0, 0, 0.9);
+}
+
+.game-over h2 {
+  color: #FF0000;
 }
 </style>
