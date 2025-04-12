@@ -1,5 +1,5 @@
 // src/composables/useGameLoop.ts
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onUnmounted } from 'vue';
 
 /**
  * Composable for managing the game loop

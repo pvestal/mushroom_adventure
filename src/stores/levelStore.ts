@@ -93,9 +93,14 @@ function createLevel1(): Level {
   for (let y = 0; y < height; y++) {
     tiles[y] = [];
     for (let x = 0; x < width; x++) {
-      // Bottom row is ground
+      // Bottom row is ground, with pipe body exception
       if (y === height - 1) {
-        tiles[y][x] = TileType.GROUND;
+        // Pipe body in the ground row
+        if (x === 12 || x === 13) {
+          tiles[y][x] = TileType.PIPE_BODY;
+        } else {
+          tiles[y][x] = TileType.GROUND;
+        }
       } 
       // Place some bricks in the air
       else if (y === height - 4 && (x === 5 || x === 6 || x === 7)) {
@@ -108,9 +113,6 @@ function createLevel1(): Level {
       // Place a pipe
       else if (y === height - 2 && (x === 12 || x === 13)) {
         tiles[y][x] = TileType.PIPE_TOP;
-      }
-      else if (y === height - 1 && (x === 12 || x === 13)) {
-        tiles[y][x] = TileType.PIPE_BODY;
       }
       // Place coins
       else if (y === height - 5 && (x === 6 || x === 7)) {

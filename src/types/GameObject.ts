@@ -26,7 +26,7 @@ export interface GameObject {
   speed?: number;
   jumpPower?: number;
   isJumping?: boolean;
-  tileType?: any;
+  tileType?: string;
   collectibleType?: string;
   enemyType?: string;
   direction?: number;
@@ -36,6 +36,15 @@ export interface GameObject {
   stopMoving?: () => void;
   jump?: () => void;
   collect?: () => void;
+
+  // New sprite properties
+  spriteKey?: string;         // Reference to the sprite to use
+  spriteFrame?: number;       // Current animation frame
+  spriteFrameCount?: number;  // Total frames in animation
+  spriteFrameWidth?: number;  // Width of a single frame
+  spriteFrameHeight?: number; // Height of a single frame
+  spriteAnimationSpeed?: number; // Frames per second
+  spriteAnimationTime?: number;  // Current animation time
 }
 
 // Add window keyboard definition
